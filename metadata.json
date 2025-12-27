@@ -1,0 +1,7 @@
+{
+  "name": "SwipeStudy",
+  "description": "Transform messy notes into interactive flashcards with AI. Swipe to learn, track your progress, and use the smart target calculator to hit your grade goals.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
