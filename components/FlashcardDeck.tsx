@@ -7,13 +7,13 @@ interface FlashcardDeckProps {
   mode: StudyMode;
   onFinish: (updatedCards: Flashcard[]) => void;
   onBack: () => void;
+  onAskAI?: (message: string) => void;
 }
 
-const FlashcardDeck: React.FC<FlashcardDeckProps> = ({ cards, mode, onFinish, onBack }) => {
+const FlashcardDeck: React.FC<FlashcardDeckProps> = ({ cards, mode, onFinish, onBack, onAskAI }) => {
   const [sessionCards, setSessionCards] = useState<Flashcard[]>(() => {
     let list = [...cards];
     if (mode === 'random') list = list.sort(() => Math.random() - 0.5);
-    // Fix: Changed 'known' to 'mastered' to match Flashcard status type definition in types.ts
     if (mode === 'focused') list = list.filter(c => c.status !== 'mastered' || c.nextReview <= Date.now()).sort((a,b) => a.nextReview - b.nextReview);
     return list;
   });
@@ -35,7 +35,6 @@ const FlashcardDeck: React.FC<FlashcardDeckProps> = ({ cards, mode, onFinish, on
         const newInterval = card.interval === 0 ? 1 : card.interval * 2;
         updated[currentIndex] = {
           ...card,
-          // Fix: Changed 'known' to 'mastered' to match Flashcard status type
           status: 'mastered',
           interval: newInterval,
           nextReview: Date.now() + (newInterval * 24 * 60 * 60 * 1000)
@@ -43,7 +42,6 @@ const FlashcardDeck: React.FC<FlashcardDeckProps> = ({ cards, mode, onFinish, on
       } else { // Review / Struggle
         updated[currentIndex] = {
           ...card,
-          // Fix: Changed 'review' to 'learning' to match Flashcard status type
           status: 'learning',
           interval: 1,
           nextReview: Date.now() + (1 * 24 * 60 * 60 * 1000)
@@ -101,6 +99,17 @@ const FlashcardDeck: React.FC<FlashcardDeckProps> = ({ cards, mode, onFinish, on
             <p className="mt-8 text-slate-300 text-[10px] font-black uppercase tracking-widest">Tap to reveal answer</p>
           </div>
           <div className="absolute inset-0 backface-hidden bg-indigo-50 rounded-3xl shadow-xl flex flex-col items-center justify-center p-8 text-center border border-indigo-100 rotate-y-180">
+            {onAskAI && (
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAskAI(`Can you explain this flashcard in more detail?\n\nFront: ${activeCard.front}\nBack: ${activeCard.back}\n\nI want a deeper understanding of this concept.`);
+                }}
+                className="absolute top-6 right-6 p-3 bg-white text-indigo-600 rounded-2xl shadow-md hover:scale-110 transition-transform active:scale-90"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 0 1 .865-.501 48.172 48.172 0 0 0 3.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0 0 12 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018Z" /></svg>
+              </button>
+            )}
             <p className="text-xl font-medium text-slate-700 leading-relaxed">{activeCard.back}</p>
             <p className="mt-8 text-indigo-300 text-[10px] font-black uppercase tracking-widest">Tap to hide answer</p>
           </div>

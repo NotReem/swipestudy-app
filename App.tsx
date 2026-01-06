@@ -14,6 +14,7 @@ const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [view, setView] = useState<AppView>('dashboard');
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatInitialMessage, setChatInitialMessage] = useState<string | null>(null);
   const [folders, setFolders] = useState<Folder[]>([
     { id: 'f1', name: 'General Notes', color: 'indigo', createdAt: Date.now() }
   ]);
@@ -52,6 +53,11 @@ const App: React.FC = () => {
     const cardMap = new Map(updatedCards.map(c => [c.id, c]));
     setCards(prev => prev.map(c => cardMap.get(c.id) || c));
     setView('dashboard');
+  };
+
+  const openChatWithContext = (message: string) => {
+    setChatInitialMessage(message);
+    setIsChatOpen(true);
   };
 
   if (!user) return <Auth onLogin={handleLogin} />;
@@ -220,6 +226,7 @@ const App: React.FC = () => {
             mode={activeMode}
             onFinish={handleStudyFinish}
             onBack={() => setView('dashboard')}
+            onAskAI={openChatWithContext}
           />
         )}
         {view === 'learn' && (
@@ -227,6 +234,7 @@ const App: React.FC = () => {
             cards={activeFolderId ? cards.filter(c => c.folderId === activeFolderId) : cards}
             onFinish={handleStudyFinish}
             onBack={() => setView('dashboard')}
+            onAskAI={openChatWithContext}
           />
         )}
         {view === 'test' && (
@@ -239,7 +247,14 @@ const App: React.FC = () => {
         {view === 'solver' && <WorksheetSolver onBack={() => setView('dashboard')} />}
       </main>
 
-      <AIChat isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
+      <AIChat 
+        isOpen={isChatOpen} 
+        onClose={() => {
+          setIsChatOpen(false);
+          setChatInitialMessage(null);
+        }} 
+        initialMessage={chatInitialMessage}
+      />
     </div>
   );
 };

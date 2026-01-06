@@ -12,11 +12,11 @@ interface Message {
 interface AIChatProps {
   isOpen: boolean;
   onClose: () => void;
+  initialMessage?: string | null;
 }
 
 type ConnectionStatus = 'idle' | 'requesting-mic' | 'connecting' | 'active' | 'error';
 
-// Manual Base64 Helpers
 function decode(base64: string) {
   const binaryString = atob(base64);
   const len = binaryString.length;
@@ -36,7 +36,6 @@ function encode(bytes: Uint8Array) {
   return btoa(binary);
 }
 
-// Fix: Implemented decodeAudioData following the official Gemini Live API guidelines
 async function decodeAudioData(
   data: Uint8Array,
   ctx: AudioContext,
@@ -56,8 +55,7 @@ async function decodeAudioData(
   return buffer;
 }
 
-const AIChat: React.FC<AIChatProps> = ({ isOpen, onClose }) => {
-  // Persistence: Load messages from localStorage on mount
+const AIChat: React.FC<AIChatProps> = ({ isOpen, onClose, initialMessage }) => {
   const [messages, setMessages] = useState<Message[]>(() => {
     const saved = localStorage.getItem('ss_chat_history');
     return saved ? JSON.parse(saved) : [
@@ -87,14 +85,31 @@ const AIChat: React.FC<AIChatProps> = ({ isOpen, onClose }) => {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
 
-  // Persistence: Save messages to localStorage whenever they change
+  useEffect(() => {
+    if (isOpen && initialMessage) {
+      handleDirectMessage(initialMessage);
+    }
+  }, [isOpen, initialMessage]);
+
   useEffect(() => {
     localStorage.setItem('ss_chat_history', JSON.stringify(messages));
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, liveTranscript, isOpen]);
 
+  const handleDirectMessage = async (msg: string) => {
+    setMessages(prev => [...prev, { role: 'user', content: msg }]);
+    setLoading(true);
+    try {
+      const response = await chatWithStudyAssistant(msg);
+      setMessages(prev => [...prev, { role: 'assistant', content: response }]);
+    } catch (e) {
+      setMessages(prev => [...prev, { role: 'assistant', content: "Snagged. Try again?" }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const stopLiveSession = () => {
-    console.log("Stopping live session...");
     setIsLive(false);
     setIsStarting(false);
     setStatus('idle');
@@ -183,7 +198,6 @@ const AIChat: React.FC<AIChatProps> = ({ isOpen, onClose }) => {
       };
       drawVolume();
 
-      // Build context string from history to "continue" the chat
       const historyContext = messages.slice(-5).map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n');
 
       setStatus('connecting');
@@ -195,21 +209,12 @@ const AIChat: React.FC<AIChatProps> = ({ isOpen, onClose }) => {
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } }
           },
-          systemInstruction: `You are SwipeStudy AI, a brilliant study assistant. 
-          IMPORTANT: You must respond ONLY in English. Never use Arabic or any other language.
-          You are helping a student in a live voice conversation.
-          
-          CONVERSATION CONTEXT SO FAR:
-          ${historyContext}
-
-          If the context above shows an ongoing conversation, say: "I'm back and ready to continue. What was that you mentioned?" 
-          Otherwise, say: "I'm ready to help you study, what's on your mind?"`,
+          systemInstruction: `You are SwipeStudy AI. Respond ONLY in English. Use conversation context: ${historyContext}`,
           inputAudioTranscription: {},
           outputAudioTranscription: {}
         },
         callbacks: {
           onopen: () => {
-            console.log("Connection established");
             setStatus('active');
             setIsLive(true);
             setIsStarting(false);
@@ -217,7 +222,6 @@ const AIChat: React.FC<AIChatProps> = ({ isOpen, onClose }) => {
             if (!audioContextInRef.current) return;
             const scriptProcessor = audioContextInRef.current.createScriptProcessor(4096, 1, 1);
             scriptProcessor.onaudioprocess = (e) => {
-              // Fix: Rely solely on sessionPromise to send data as per Live API guidelines to prevent race conditions
               const inputData = e.inputBuffer.getChannelData(0);
               const int16 = new Int16Array(inputData.length);
               for (let i = 0; i < inputData.length; i++) {
@@ -282,7 +286,6 @@ const AIChat: React.FC<AIChatProps> = ({ isOpen, onClose }) => {
       });
       liveSessionRef.current = await sessionPromise;
     } catch (err) {
-      console.error(err);
       setStatus('error');
       stopLiveSession();
     }
@@ -297,7 +300,6 @@ const AIChat: React.FC<AIChatProps> = ({ isOpen, onClose }) => {
     setAttachedImage(null);
     setLoading(true);
     try {
-      // Shared history for text-mode too (service uses internal history if needed, but we pass current message)
       const response = await chatWithStudyAssistant(userMsg || "Explain this", img || undefined);
       setMessages(prev => [...prev, { role: 'assistant', content: response }]);
     } catch (e) {
@@ -428,7 +430,7 @@ const AIChat: React.FC<AIChatProps> = ({ isOpen, onClose }) => {
                 <span className="uppercase tracking-widest text-[10px]">{status === 'active' ? 'English Only' : 'Connecting...'}</span>
               </div>
             ) : (
-              <input type="text" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSend()} placeholder="Ask anything in English..." className="flex-1 bg-slate-100 text-slate-900 border border-slate-200 rounded-2xl p-3 text-sm font-medium focus:ring-2 focus:ring-indigo-500 shadow-inner" />
+              <input type="text" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSend()} placeholder="Ask anything in English..." className="flex-1 bg-slate-900 text-white border border-slate-800 rounded-2xl p-3 text-sm font-medium focus:ring-2 focus:ring-indigo-500 shadow-inner" />
             )}
 
             {!isLive && !isStarting && (
