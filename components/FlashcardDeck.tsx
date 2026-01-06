@@ -13,7 +13,8 @@ const FlashcardDeck: React.FC<FlashcardDeckProps> = ({ cards, mode, onFinish, on
   const [sessionCards, setSessionCards] = useState<Flashcard[]>(() => {
     let list = [...cards];
     if (mode === 'random') list = list.sort(() => Math.random() - 0.5);
-    if (mode === 'focused') list = list.filter(c => c.status !== 'known' || c.nextReview <= Date.now()).sort((a,b) => a.nextReview - b.nextReview);
+    // Fix: Changed 'known' to 'mastered' to match Flashcard status type definition in types.ts
+    if (mode === 'focused') list = list.filter(c => c.status !== 'mastered' || c.nextReview <= Date.now()).sort((a,b) => a.nextReview - b.nextReview);
     return list;
   });
   
@@ -34,14 +35,16 @@ const FlashcardDeck: React.FC<FlashcardDeckProps> = ({ cards, mode, onFinish, on
         const newInterval = card.interval === 0 ? 1 : card.interval * 2;
         updated[currentIndex] = {
           ...card,
-          status: 'known',
+          // Fix: Changed 'known' to 'mastered' to match Flashcard status type
+          status: 'mastered',
           interval: newInterval,
           nextReview: Date.now() + (newInterval * 24 * 60 * 60 * 1000)
         };
       } else { // Review / Struggle
         updated[currentIndex] = {
           ...card,
-          status: 'review',
+          // Fix: Changed 'review' to 'learning' to match Flashcard status type
+          status: 'learning',
           interval: 1,
           nextReview: Date.now() + (1 * 24 * 60 * 60 * 1000)
         };

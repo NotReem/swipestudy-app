@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
-import { Flashcard, QuestionType, StudyConfig } from '../types';
-import { evaluateAnswer } from '../services/geminiService';
+import { Flashcard, QuestionType, StudyConfig, TestQuestion } from '../types';
+import { evaluateAnswer, generatePracticeTest } from '../services/geminiService';
 
 interface LearnModeProps {
   cards: Flashcard[];
@@ -12,17 +12,21 @@ interface LearnModeProps {
 const LearnMode: React.FC<LearnModeProps> = ({ cards, onFinish, onBack }) => {
   const [setup, setSetup] = useState(true);
   const [config, setConfig] = useState<StudyConfig>({
-    questionTypes: ['written'],
+    questionTypes: ['multiple-choice', 'written'],
     itemCount: Math.min(cards.length, 10)
   });
 
-  const [sessionCards, setSessionCards] = useState<Flashcard[]>([]);
-  const [currentRoundQueue, setCurrentRoundQueue] = useState<Flashcard[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [sessionQuestions, setSessionQuestions] = useState<TestQuestion[]>([]);
+  const [currentRoundQueue, setCurrentRoundQueue] = useState<string[]>([]); // Array of Question IDs
   const [currentIndex, setCurrentIndex] = useState(0);
   const [userAnswer, setUserAnswer] = useState('');
   const [evaluating, setEvaluating] = useState(false);
   const [feedback, setFeedback] = useState<{ isCorrect: boolean; text: string } | null>(null);
   const [masteredCardsInSession, setMasteredCardsInSession] = useState<Flashcard[]>([]);
+
+  // We need to keep track of the original flashcards to update mastery
+  const [activeCards, setActiveCards] = useState<Flashcard[]>([]);
 
   const toggleType = (type: QuestionType) => {
     setConfig(prev => ({
@@ -33,20 +37,41 @@ const LearnMode: React.FC<LearnModeProps> = ({ cards, onFinish, onBack }) => {
     }));
   };
 
-  const startLearning = () => {
+  const startLearning = async () => {
     if (config.questionTypes.length === 0) return;
-    const initial = cards.filter(c => c.masteryScore < 3).slice(0, config.itemCount);
-    setSessionCards(initial);
-    setCurrentRoundQueue(initial);
-    setSetup(false);
+    setLoading(true);
+    
+    try {
+      const selectedCards = cards.filter(c => c.masteryScore < 3).slice(0, config.itemCount);
+      setActiveCards(selectedCards);
+      
+      // Generate AI questions for these cards
+      const questions = await generatePracticeTest(selectedCards, config.questionTypes, selectedCards.length);
+      setSessionQuestions(questions);
+      setCurrentRoundQueue(questions.map(q => q.id));
+      setSetup(false);
+    } catch (e) {
+      alert("AI failed to prepare questions. Try again.");
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleSubmit = async () => {
-    if (!userAnswer.trim() || evaluating || feedback) return;
+  const handleSubmit = async (overrideAnswer?: string) => {
+    const finalAnswer = overrideAnswer || userAnswer;
+    if (!finalAnswer.trim() || evaluating || feedback) return;
+    
     setEvaluating(true);
-    const card = currentRoundQueue[currentIndex];
+    const questionId = currentRoundQueue[currentIndex];
+    const question = sessionQuestions.find(q => q.id === questionId)!;
+    
+    // Find the original card for this question (mapping back via question index usually, but for reliability we use the question data)
+    // For Learn mode, we assume 1:1 question to card for the session
+    const cardIndex = sessionQuestions.indexOf(question);
+    const card = activeCards[cardIndex];
+
     try {
-      const result = await evaluateAnswer(card.front, card.back, userAnswer);
+      const result = await evaluateAnswer(question.question, question.correctAnswer, finalAnswer);
       setFeedback({ isCorrect: result.isCorrect, text: result.feedback });
       
       const updatedCard: Flashcard = {
@@ -55,7 +80,9 @@ const LearnMode: React.FC<LearnModeProps> = ({ cards, onFinish, onBack }) => {
         lastAttemptCorrect: result.isCorrect
       };
 
-      // Keep track of mastered vs still learning
+      // Update local state
+      setActiveCards(prev => prev.map((c, i) => i === cardIndex ? updatedCard : c));
+
       if (updatedCard.masteryScore >= 3) {
         setMasteredCardsInSession(prev => [...prev, updatedCard]);
       }
@@ -67,35 +94,42 @@ const LearnMode: React.FC<LearnModeProps> = ({ cards, onFinish, onBack }) => {
   };
 
   const nextCard = () => {
-    const card = currentRoundQueue[currentIndex];
-    const updatedCard = {
-      ...card,
-      masteryScore: feedback?.isCorrect ? card.masteryScore + 1 : Math.max(0, card.masteryScore - 1),
-      lastAttemptCorrect: feedback?.isCorrect
-    };
+    const isCorrect = feedback?.isCorrect;
+    const questionId = currentRoundQueue[currentIndex];
+    const cardIndex = sessionQuestions.findIndex(q => q.id === questionId);
+    const card = activeCards[cardIndex];
 
     setFeedback(null);
     setUserAnswer('');
 
-    // If wrong, push to the end of the current round queue
     let newQueue = [...currentRoundQueue];
-    if (!updatedCard.lastAttemptCorrect) {
-       newQueue.push(updatedCard);
-    }
     
-    // Update the card state in the queue
-    newQueue[currentIndex] = updatedCard;
+    // Logic: If wrong, the question stays in the queue until it's correct
+    // If correct, check if the card is "mastered" (Score 3). If not, it can reappear in later rounds.
+    // In Learn Mode "Rounds", we usually clear the queue per round.
+    
+    if (!isCorrect) {
+      // Move this failed question to the end of the current round
+      newQueue.push(questionId);
+    }
 
     if (currentIndex < newQueue.length - 1) {
       setCurrentRoundQueue(newQueue);
       setCurrentIndex(prev => prev + 1);
     } else {
-      // Round Complete
-      const remaining = newQueue.filter(c => c.masteryScore < 3 && c.lastAttemptCorrect === false);
-      if (remaining.length === 0) {
-        onFinish(cards.map(c => masteredCardsInSession.find(m => m.id === c.id) || c));
+      // Round Complete - Filter out cards that are now mastered
+      const remainingQuestions = sessionQuestions.filter((q, idx) => {
+        const c = activeCards[idx];
+        return c.masteryScore < 3;
+      }).map(q => q.id);
+
+      if (remainingQuestions.length === 0) {
+        // All session cards mastered!
+        const finalCards = cards.map(c => masteredCardsInSession.find(m => m.id === c.id) || c);
+        onFinish(finalCards);
       } else {
-        setCurrentRoundQueue(remaining);
+        // Start another round with remaining
+        setCurrentRoundQueue(remainingQuestions);
         setCurrentIndex(0);
       }
     }
@@ -105,7 +139,7 @@ const LearnMode: React.FC<LearnModeProps> = ({ cards, onFinish, onBack }) => {
     <div className="p-8 space-y-8 animate-in fade-in zoom-in duration-500 max-w-md mx-auto">
       <div className="text-center space-y-2">
         <h2 className="text-3xl font-black italic text-slate-800">Learn Setup</h2>
-        <p className="text-slate-500 font-medium">AI will verify your understanding in rounds.</p>
+        <p className="text-slate-500 font-medium">AI rounds will verify your mastery.</p>
       </div>
 
       <div className="space-y-4">
@@ -126,62 +160,94 @@ const LearnMode: React.FC<LearnModeProps> = ({ cards, onFinish, onBack }) => {
 
       <button 
         onClick={startLearning}
-        disabled={config.questionTypes.length === 0}
-        className="w-full py-5 bg-indigo-600 text-white rounded-[2rem] font-black shadow-xl shadow-indigo-100 transition-all hover:scale-105 active:scale-95 disabled:opacity-30"
+        disabled={config.questionTypes.length === 0 || loading}
+        className="w-full py-5 bg-indigo-600 text-white rounded-[2rem] font-black shadow-xl shadow-indigo-100 transition-all hover:scale-105 active:scale-95 disabled:opacity-30 flex items-center justify-center space-x-2"
       >
-        Start Round 1
+        {loading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <span>Start Session</span>}
       </button>
       <button onClick={onBack} className="w-full text-[10px] font-black text-slate-400 uppercase tracking-widest">Back</button>
     </div>
   );
 
-  const activeCard = currentRoundQueue[currentIndex];
-  if (!activeCard) return null;
+  const activeQuestionId = currentRoundQueue[currentIndex];
+  const activeQuestion = sessionQuestions.find(q => q.id === activeQuestionId);
+  const cardIndex = sessionQuestions.findIndex(q => q.id === activeQuestionId);
+  const activeCard = activeCards[cardIndex];
+
+  if (!activeQuestion) return null;
 
   return (
-    <div className="p-6 space-y-8 animate-in fade-in duration-500 max-w-md mx-auto">
+    <div className="p-6 space-y-8 animate-in fade-in duration-500 max-w-md mx-auto pb-24">
       <div className="flex justify-between items-center">
         <button onClick={onBack} className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Exit</button>
         <div className="flex space-x-1">
           {[1,2,3].map(i => (
-            <div key={i} className={`w-3 h-3 rounded-full ${activeCard.masteryScore >= i ? 'bg-emerald-500' : 'bg-slate-100'}`} />
+            <div key={i} className={`w-3 h-3 rounded-full transition-colors ${activeCard.masteryScore >= i ? 'bg-emerald-500' : 'bg-slate-200'}`} />
           ))}
         </div>
         <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{currentIndex + 1} / {currentRoundQueue.length}</span>
       </div>
 
       <div className="bg-white rounded-[2.5rem] p-10 shadow-2xl shadow-indigo-50 text-center space-y-6">
-        <h2 className="text-2xl font-black text-slate-800 leading-tight">{activeCard.front}</h2>
+        <div className="inline-block px-3 py-1 bg-indigo-50 text-indigo-500 text-[10px] font-black uppercase tracking-widest rounded-full">
+          {activeQuestion.type.replace('-', ' ')}
+        </div>
+        <h2 className="text-2xl font-black text-slate-800 leading-tight">{activeQuestion.question}</h2>
       </div>
 
       <div className="space-y-4">
         {!feedback ? (
-          <>
-            <textarea
-              className="w-full bg-slate-900 text-white placeholder-slate-500 border border-slate-800 rounded-[2rem] p-6 text-sm font-medium focus:border-indigo-500 focus:bg-slate-800 outline-none transition-all h-32 resize-none shadow-2xl"
-              placeholder="Explain the concept..."
-              value={userAnswer}
-              onChange={e => setUserAnswer(e.target.value)}
-            />
-            <button 
-              onClick={handleSubmit}
-              disabled={!userAnswer.trim() || evaluating}
-              className="w-full py-5 bg-indigo-600 text-white rounded-[2rem] font-black shadow-xl shadow-indigo-100 flex items-center justify-center space-x-2"
-            >
-              {evaluating ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <span>Verify Mastery</span>}
-            </button>
-          </>
+          <div className="space-y-4">
+            {activeQuestion.type === 'multiple-choice' || activeQuestion.type === 'true-false' ? (
+              <div className="grid grid-cols-1 gap-3">
+                {(activeQuestion.type === 'true-false' ? ['True', 'False'] : activeQuestion.options)?.map(opt => (
+                  <button 
+                    key={opt}
+                    onClick={() => {
+                      setUserAnswer(opt);
+                      handleSubmit(opt);
+                    }}
+                    className={`p-5 rounded-[1.5rem] border-2 text-left transition-all ${userAnswer === opt ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-100 bg-white text-slate-700 hover:border-slate-200 shadow-sm'}`}
+                  >
+                    <span className="font-bold text-sm">{opt}</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <>
+                <textarea
+                  className="w-full bg-slate-900 text-white placeholder-slate-500 border-2 border-slate-800 rounded-[2rem] p-6 text-sm font-medium focus:border-indigo-500 focus:ring-4 focus:ring-indigo-900/10 outline-none transition-all h-32 resize-none shadow-2xl"
+                  placeholder="Explain the concept in your own words..."
+                  value={userAnswer}
+                  onChange={e => setUserAnswer(e.target.value)}
+                />
+                <button 
+                  onClick={() => handleSubmit()}
+                  disabled={!userAnswer.trim() || evaluating}
+                  className="w-full py-5 bg-indigo-600 text-white rounded-[2rem] font-black shadow-xl shadow-indigo-100 flex items-center justify-center space-x-2"
+                >
+                  {evaluating ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <span>Verify Answer</span>}
+                </button>
+              </>
+            )}
+          </div>
         ) : (
           <div className={`p-8 rounded-[2rem] space-y-4 animate-in zoom-in ${feedback.isCorrect ? 'bg-emerald-50 border-2 border-emerald-100' : 'bg-red-50 border-2 border-red-100'}`}>
-            <p className="text-sm font-medium text-slate-700">{feedback.text}</p>
+            <div className="flex items-center space-x-2">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white ${feedback.isCorrect ? 'bg-emerald-500' : 'bg-red-500'}`}>
+                {feedback.isCorrect ? '✓' : '!'}
+              </div>
+              <p className="text-sm font-black uppercase tracking-wider text-slate-800">{feedback.isCorrect ? 'Correct' : 'Needs Review'}</p>
+            </div>
+            <p className="text-sm font-medium text-slate-700 leading-relaxed">{feedback.text}</p>
             {!feedback.isCorrect && (
-              <div className="p-4 bg-white rounded-xl border border-red-100 text-xs text-slate-600">
-                <span className="font-bold text-slate-400 block mb-1">REFERENCE:</span>
-                {activeCard.back}
+              <div className="p-4 bg-white/60 rounded-xl border border-red-100 text-xs text-slate-600">
+                <span className="font-bold text-slate-400 block mb-1">CORRECT ANSWER:</span>
+                {activeQuestion.correctAnswer}
               </div>
             )}
-            <button onClick={nextCard} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg">
-              {feedback.isCorrect ? 'Mastering...' : 'I will re-do this'}
+            <button onClick={nextCard} className={`w-full py-4 rounded-2xl font-black shadow-lg transition-transform active:scale-95 ${feedback.isCorrect ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'}`}>
+              {feedback.isCorrect ? 'Mastery Increasing...' : 'Continue'}
             </button>
           </div>
         )}
