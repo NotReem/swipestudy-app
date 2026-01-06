@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type, Modality } from "@google/genai";
-import { Flashcard } from "../types";
+import { Flashcard, TestQuestion, QuestionType } from "../types";
 
 const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY! });
 
@@ -40,25 +40,84 @@ export const generateFlashcards = async (imageBase64: string, folderId: string):
     folderId,
     status: 'new',
     nextReview: Date.now(),
-    interval: 0
+    interval: 0,
+    masteryScore: 0
   }));
 };
 
-export const solveWorksheet = async (imageBase64: string): Promise<string> => {
+export const generateFlashcardsFromText = async (notes: string, folderId: string): Promise<Flashcard[]> => {
   const ai = getAI();
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
-    contents: [
-      {
-        role: "user",
-        parts: [
-          { inlineData: { mimeType: "image/jpeg", data: imageBase64 } },
-          { text: "Solve this worksheet. Provide clear, step-by-step explanations for every question found in the image. Use Markdown formatting. Respond ONLY in English." },
-        ],
+    contents: [{ 
+      role: "user", 
+      parts: [{ text: `Transform these notes into a comprehensive set of flashcards. JSON array of {front, back}. notes: ${notes}` }] 
+    }],
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            front: { type: Type.STRING },
+            back: { type: Type.STRING },
+          },
+          required: ["front", "back"],
+        },
       },
-    ],
+    },
   });
-  return response.text || "Could not solve worksheet.";
+
+  const rawCards = JSON.parse(response.text || "[]");
+  return rawCards.map((card: any, index: number) => ({
+    ...card,
+    id: `card-txt-${Date.now()}-${index}`,
+    folderId,
+    status: 'new',
+    nextReview: Date.now(),
+    interval: 0,
+    masteryScore: 0
+  }));
+};
+
+export const evaluateAnswer = async (question: string, correctAnswer: string, userAnswer: string): Promise<{ isCorrect: boolean; feedback: string }> => {
+  const ai = getAI();
+  const response = await ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: [{
+      role: "user",
+      parts: [{ text: `Act as a teacher. Evaluate if the student's answer is conceptually correct.
+      Question: ${question}
+      Official Answer: ${correctAnswer}
+      Student Answer: ${userAnswer}
+      
+      Respond with JSON: { "isCorrect": boolean, "feedback": "One short sentence explaining why or encouraging." }` }]
+    }],
+    config: { responseMimeType: "application/json" }
+  });
+  return JSON.parse(response.text || '{"isCorrect":false, "feedback": "Error evaluating"}');
+};
+
+export const generatePracticeTest = async (cards: Flashcard[], types: QuestionType[], count: number): Promise<TestQuestion[]> => {
+  const ai = getAI();
+  const cardData = cards.map(c => `Q: ${c.front} | A: ${c.back}`).join('\n');
+  const response = await ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: [{
+      role: "user",
+      parts: [{ text: `Generate a practice test from these cards. 
+      Length: ${count} questions. 
+      Allowed Question Types: ${types.join(', ')}.
+      
+      Cards:
+      ${cardData}
+      
+      Return a JSON array of TestQuestion objects: { "id": "string", "type": "multiple-choice"|"true-false"|"written", "question": "string", "options": ["string"], "correctAnswer": "string" }` }]
+    }],
+    config: { responseMimeType: "application/json" }
+  });
+  return JSON.parse(response.text || "[]");
 };
 
 export const chatWithStudyAssistant = async (message: string, imageBase64?: string): Promise<string> => {
@@ -72,26 +131,23 @@ export const chatWithStudyAssistant = async (message: string, imageBase64?: stri
     model: "gemini-3-flash-preview",
     contents: [{ role: "user", parts }],
     config: {
-      systemInstruction: "You are SwipeStudy AI, a brilliant study assistant. You help users summarize notes, explain complex topics, and solve academic problems. IMPORTANT: You must respond ONLY in English. Never use any other language regardless of context. Be encouraging and concise."
+      systemInstruction: "You are SwipeStudy AI. You respond ONLY in English. Be academic, concise, and helpful."
     }
   });
-  return response.text || "I'm having trouble connecting right now.";
+  return response.text || "I'm having trouble connecting.";
 };
 
-export const generateSpeech = async (text: string): Promise<string | undefined> => {
+// Fix: Added missing solveWorksheet function to handle complex worksheet solving tasks
+export const solveWorksheet = async (imageBase64: string): Promise<string> => {
   const ai = getAI();
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash-preview-tts",
-    contents: [{ parts: [{ text }] }],
-    config: {
-      responseModalities: [Modality.AUDIO],
-      speechConfig: {
-        voiceConfig: {
-          prebuiltVoiceConfig: { voiceName: 'Zephyr' },
-        },
-      },
-    },
+    model: "gemini-3-flash-preview",
+    contents: {
+      parts: [
+        { inlineData: { mimeType: "image/jpeg", data: imageBase64 } },
+        { text: "Solve this worksheet step-by-step. Provide clear explanations for each problem. Respond ONLY in English using Markdown formatting." }
+      ]
+    }
   });
-  
-  return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+  return response.text || "I was unable to solve the worksheet. Please try a clearer image.";
 };

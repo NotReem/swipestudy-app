@@ -29,7 +29,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
             type="text" 
             placeholder="Full Name" 
             required
-            className="w-full p-4 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-indigo-600 text-slate-900 font-medium"
+            className="w-full p-4 bg-slate-100 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-600 text-slate-900 font-medium shadow-inner"
             value={name}
             onChange={e => setName(e.target.value)}
           />
@@ -38,7 +38,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
           type="email" 
           placeholder="Email Address" 
           required
-          className="w-full p-4 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-indigo-600 text-slate-900 font-medium"
+          className="w-full p-4 bg-slate-100 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-600 text-slate-900 font-medium shadow-inner"
           value={email}
           onChange={e => setEmail(e.target.value)}
         />
@@ -46,7 +46,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
           type="password" 
           placeholder="Password" 
           required
-          className="w-full p-4 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-indigo-600 text-slate-900 font-medium"
+          className="w-full p-4 bg-slate-100 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-600 text-slate-900 font-medium shadow-inner"
         />
         <button className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black text-lg shadow-xl shadow-indigo-100 transition-all hover:bg-indigo-700 active:scale-95">
           {isLogin ? 'Welcome Back' : 'Start Studying Free'}

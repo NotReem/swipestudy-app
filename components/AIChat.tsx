@@ -36,20 +36,21 @@ function encode(bytes: Uint8Array) {
   return btoa(binary);
 }
 
+// Fix: Implemented decodeAudioData following the official Gemini Live API guidelines
 async function decodeAudioData(
   data: Uint8Array,
   ctx: AudioContext,
   sampleRate: number,
   numChannels: number,
 ): Promise<AudioBuffer> {
-  const dataView = new DataView(data.buffer, data.byteOffset, data.byteLength);
-  const frameCount = data.byteLength / (numChannels * 2);
+  const dataInt16 = new Int16Array(data.buffer);
+  const frameCount = dataInt16.length / numChannels;
   const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
 
   for (let channel = 0; channel < numChannels; channel++) {
     const channelData = buffer.getChannelData(channel);
     for (let i = 0; i < frameCount; i++) {
-      channelData[i] = dataView.getInt16(i * numChannels * 2 + channel * 2, true) / 32768.0;
+      channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
     }
   }
   return buffer;
@@ -216,7 +217,7 @@ const AIChat: React.FC<AIChatProps> = ({ isOpen, onClose }) => {
             if (!audioContextInRef.current) return;
             const scriptProcessor = audioContextInRef.current.createScriptProcessor(4096, 1, 1);
             scriptProcessor.onaudioprocess = (e) => {
-              if (!liveSessionRef.current) return;
+              // Fix: Rely solely on sessionPromise to send data as per Live API guidelines to prevent race conditions
               const inputData = e.inputBuffer.getChannelData(0);
               const int16 = new Int16Array(inputData.length);
               for (let i = 0; i < inputData.length; i++) {
@@ -224,7 +225,7 @@ const AIChat: React.FC<AIChatProps> = ({ isOpen, onClose }) => {
               }
               const base64 = encode(new Uint8Array(int16.buffer));
               sessionPromise.then(session => {
-                if (session) session.sendRealtimeInput({ media: { data: base64, mimeType: 'audio/pcm;rate=16000' } });
+                session.sendRealtimeInput({ media: { data: base64, mimeType: 'audio/pcm;rate=16000' } });
               });
             };
             micSource.connect(scriptProcessor);
@@ -427,7 +428,7 @@ const AIChat: React.FC<AIChatProps> = ({ isOpen, onClose }) => {
                 <span className="uppercase tracking-widest text-[10px]">{status === 'active' ? 'English Only' : 'Connecting...'}</span>
               </div>
             ) : (
-              <input type="text" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSend()} placeholder="Ask anything in English..." className="flex-1 bg-slate-50 text-slate-900 border-none rounded-2xl p-3 text-sm font-medium focus:ring-2 focus:ring-indigo-500 shadow-inner" />
+              <input type="text" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSend()} placeholder="Ask anything in English..." className="flex-1 bg-slate-100 text-slate-900 border border-slate-200 rounded-2xl p-3 text-sm font-medium focus:ring-2 focus:ring-indigo-500 shadow-inner" />
             )}
 
             {!isLive && !isStarting && (
